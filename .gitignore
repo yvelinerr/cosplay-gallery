@@ -1,0 +1,20 @@
+# ===== 数据与隐私（绝不提交） =====
+data/
+*.log
+README.local.md
+
+# 令牌 / 分享信息
+token.txt
+share-info.txt
+*.token
+
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ===== 系统 / 编辑器 =====
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

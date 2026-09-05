@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本地 Cosplay 图库</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222c;
+    --border: #2a2f3a; --text: #e8eaed; --muted: #9aa3af;
+    --accent: #e2556e; --accent2: #ff8fab; --ok: #3ddc84; --warn: #f5a623;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+    min-height: 100vh;
+  }
+  a { color: var(--accent2); text-decoration: none; }
+
+  /* ---------- 顶栏 ---------- */
+  header {
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 14px 24px; background: linear-gradient(135deg, #1b1e28, #241a26);
+    border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 20;
+  }
+  header h1 { font-size: 20px; font-weight: 700; letter-spacing: .5px; }
+  header h1 small { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 8px; }
+  .badge {
+    padding: 4px 12px; border-radius: 999px; font-size: 12px; font-weight: 600;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--muted);
+  }
+  .badge.running { color: var(--ok); border-color: var(--ok); }
+  .badge.error  { color: var(--warn); border-color: var(--warn); }
+  .stat {
+    margin-left: auto; display: flex; gap: 18px; font-size: 13px; color: var(--muted);
+  }
+  .stat b { color: var(--text); font-size: 16px; display: block; text-align: center; }
+  .spacer { flex: 1; }
+
+  /* ---------- 控制面板 ---------- */
+  .panel {
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    padding: 12px 24px; display: none; gap: 12px; flex-wrap: wrap; align-items: end;
+  }
+  .panel.open { display: flex; }
+  .panel label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  .panel input {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 7px 10px; font-size: 13px; width: 230px; outline: none;
+  }
+  .panel input:focus { border-color: var(--accent); }
+  .panel input.short { width: 90px; }
+  .btn {
+    background: var(--accent); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer;
+  }
+  .btn:hover { filter: brightness(1.12); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.ghost { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+  .btn.small { padding: 5px 12px; font-size: 12px; }
+
+  /* 进度条 */
+  .progress-wrap { flex-basis: 100%; display: none; }
+  .progress-wrap.visible { display: block; }
+  .bar { height: 8px; background: var(--panel2); border-radius: 99px; overflow: hidden; }
+  .bar > div { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent2)); transition: width .4s; }
+  .pmeta { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); margin-top: 5px; flex-wrap: wrap; gap: 4px; }
+
+  .logbox {
+    flex-basis: 100%; max-height: 130px; overflow: auto; background: #0c0e12;
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px;
+    font-family: Consolas, monospace; font-size: 12px; line-height: 1.6; color: #b8c4d0;
+    display: none;
+  }
+  .logbox.visible { display: block; }
+
+  /* ---------- 工具栏 ---------- */
+  .toolbar {
+    display: flex; align-items: center; gap: 10px; padding: 14px 24px 6px; flex-wrap: wrap;
+  }
+  .toolbar input[type=search] {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 8px 12px; font-size: 13px; width: 260px; outline: none;
+  }
+  .toolbar input[type=search]:focus { border-color: var(--accent); }
+
+  /* ---------- 筛选栏（分类 + 标签） ---------- */
+  #filterwrap { display: none; padding: 8px 24px 2px; gap: 6px; flex-direction: column; }
+  #filterwrap.visible { display: flex; }
+  .frow { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .frow .lbl { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .fbar { display: flex; gap: 6px; flex-wrap: wrap; max-height: 84px; overflow: auto; }
+  .chip {
+    background: var(--panel); border: 1px solid var(--border); color: var(--text);
+    border-radius: 999px; padding: 4px 12px; font-size: 12px; cursor: pointer;
+    transition: all .15s; white-space: nowrap;
+  }
+  .chip:hover { border-color: var(--accent2); }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .chip.cat-on { background: #2e7d5b; border-color: #3ddc84; color: #fff; }
+  #btnClearTag { display: none; }
+
+  /* ---------- 文章网格 ---------- */
+  #grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px; padding: 16px 24px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    overflow: hidden; cursor: pointer; transition: transform .15s, border-color .15s;
+  }
+  .card:hover { transform: translateY(-3px); border-color: var(--accent); }
+  .del-btn {
+    position: absolute; left: 6px; top: 6px; background: rgba(0,0,0,.6);
+    border: none; color: #ddd; border-radius: 6px; padding: 3px 9px;
+    font-size: 13px; cursor: pointer; opacity: 0; transition: opacity .15s, background .15s;
+    z-index: 2;
+  }
+  .card:hover .del-btn { opacity: 1; }
+  .del-btn:hover { background: #d33; color: #fff; }
+  .btn.danger { color: #ff8a8a; }
+  .btn.danger:hover { background: #d33; color: #fff; border-color: #d33; }
+  .thumb { aspect-ratio: 3/4; background: #0c0e12; position: relative; overflow: hidden; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .thumb .cnt {
+    position: absolute; right: 6px; bottom: 6px; background: rgba(0,0,0,.72);
+    color: #fff; font-size: 11px; padding: 2px 8px; border-radius: 99px;
+  }
+  .card .t {
+    padding: 9px 11px; font-size: 13px; line-height: 1.45; min-height: 38px;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .empty { grid-column: 1/-1; text-align: center; color: var(--muted); padding: 60px 0; }
+
+  /* ---------- 分页 ---------- */
+  .pager { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 8px 0 28px; }
+  .pager .info { color: var(--muted); font-size: 13px; }
+
+  /* ---------- 详情视图 ---------- */
+  #detail {
+    position: fixed; inset: 0; background: var(--bg); z-index: 50; overflow-y: auto;
+    display: none;
+  }
+  #detail.open { display: block; }
+  #detail .dhead {
+    position: sticky; top: 0; background: rgba(15,17,21,.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border); padding: 12px 24px; z-index: 5;
+    display: flex; align-items: center; gap: 14px;
+  }
+  #detail .dhead h2 { font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #detail .dhead .meta { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  #detail .dhead-main { flex: 1; min-width: 0; }
+  .dmeta-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+  .dmeta-line .lbl { font-size: 12px; color: var(--muted); }
+  .dmeta-line .chip { padding: 2px 10px; font-size: 11px; }
+  .dcat { color: var(--muted); font-size: 12px; background: var(--panel2); border-radius: 4px; padding: 2px 8px; }
+  .dgrid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 10px; padding: 18px 24px 40px;
+  }
+  .dgrid img {
+    width: 100%; display: block; border-radius: 6px; cursor: zoom-in;
+    background: #0c0e12; border: 1px solid var(--border);
+  }
+  .vsec { padding: 16px 24px 4px; }
+  .vhead { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
+  .vitem {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 12px 14px; margin-bottom: 10px; max-width: 860px;
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  }
+  .vlink {
+    color: var(--accent2); font-size: 13px; font-weight: 600;
+    text-decoration: none; display: inline-flex; align-items: center; gap: 6px;
+  }
+  .vlink:hover { text-decoration: underline; }
+  .vexpand {
+    background: var(--panel2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer;
+  }
+  .vexpand:hover { border-color: var(--accent2); }
+  .vframe { width: 100%; flex-basis: 100%; display: none; }
+  .vframe.open { display: block; }
+  .vframe iframe { width: 100%; aspect-ratio: 16/9; border: none; border-radius: 6px; display: block; }
+  .vnote { font-size: 12px; color: var(--muted); flex-basis: 100%; }
+  .dloading { text-align: center; padding: 60px; color: var(--muted); }
+
+  /* ---------- 已删除管理弹层 ---------- */
+  .modal-mask {
+    position: fixed; inset: 0; background: rgba(0,0,0,.7); z-index: 90;
+    display: none; align-items: center; justify-content: center;
+  }
+  .modal-mask.open { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    width: min(620px, 92vw); max-height: 80vh; display: flex; flex-direction: column;
+    overflow: hidden;
+  }
+  .modal .mhead {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px; border-bottom: 1px solid var(--border); font-weight: 600;
+  }
+  .modal .mhead .x { background: none; border: none; color: var(--muted); font-size: 22px; cursor: pointer; }
+  .modal .mbody { padding: 8px 18px 18px; overflow-y: auto; }
+  .drow {
+    display: flex; align-items: center; gap: 10px; padding: 9px 4px;
+    border-bottom: 1px solid var(--border); font-size: 13px;
+  }
+  .drow:last-child { border-bottom: none; }
+  .drow .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+  .drow .delat { font-size: 11px; color: var(--muted); white-space: nowrap; }
+
+  /* ---------- Lightbox ---------- */
+  #lb {
+    position: fixed; inset: 0; background: rgba(0,0,0,.93); z-index: 100;
+    display: none; align-items: center; justify-content: center; flex-direction: column;
+  }
+  #lb.open { display: flex; }
+  #lb img { max-width: 94vw; max-height: 88vh; object-fit: contain; border-radius: 4px; }
+  #lb .lbinfo { color: #cfd6de; font-size: 13px; margin-top: 10px; }
+  #lb .lbnav {
+    position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 64px;
+    background: rgba(255,255,255,.08); border: none; color: #fff; font-size: 26px;
+    cursor: pointer; border-radius: 8px; display: flex; align-items: center; justify-content: center;
+  }
+  #lb .lbnav:hover { background: rgba(255,255,255,.18); }
+  #lb .prev { left: 12px; } #lb .next { right: 12px; }
+  #lb .close {
+    position: absolute; top: 14px; right: 18px; background: none; border: none;
+    color: #fff; font-size: 30px; cursor: pointer;
+  }
+
+  .toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: var(--panel2); border: 1px solid var(--accent); color: var(--text);
+    padding: 10px 20px; border-radius: 8px; font-size: 13px; z-index: 200;
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>📚 本地 Cosplay 图库 <small>cosplaytele.com</small></h1>
+  <span id="badge" class="badge">待机</span>
+  <div class="stat">
+    <div><b id="stPosts">0</b>文章</div>
+    <div><b id="stImages">0</b>图片</div>
+    <div><b id="stDisk">0 MB</b>占用</div>
+  </div>
+  <div class="spacer"></div>
+  <button id="btnTogglePanel" class="btn ghost small">⚙ 爬取设置</button>
+</header>
+
+<div id="panel" class="panel">
+  <div>
+    <label>入口列表 URL（首页或分类页）</label>
+    <input id="inpUrl" value="https://cosplaytele.com">
+  </div>
+  <div>
+    <label>代理（留空直连）</label>
+    <input id="inpProxy" value="http://127.0.0.1:7890" placeholder="http://127.0.0.1:7890">
+  </div>
+  <div>
+    <label>起始页</label>
+    <input id="inpStart" class="short" type="number" value="1" min="1">
+  </div>
+  <div>
+    <label>结束页（留空=全部）</label>
+    <input id="inpEnd" class="short" type="number" placeholder="全部" min="1">
+  </div>
+  <div>
+    <button id="btnStart" class="btn">▶ 开始爬取</button>
+    <button id="btnStop" class="btn ghost" disabled>⏹ 停止</button>
+    <button id="btnMeta" class="btn ghost">🏷 补全标签</button>
+  </div>
+  <div class="progress-wrap" id="pw">
+    <div class="bar"><div id="pbar"></div></div>
+    <div class="pmeta">
+      <span id="pinfo">-</span>
+      <span id="pcur">-</span>
+    </div>
+  </div>
+  <div class="logbox" id="logbox"></div>
+</div>
+
+<div id="filterwrap">
+  <div class="frow" id="catwrap">
+    <span class="lbl">📁 分类：</span>
+    <div class="fbar" id="catbar"></div>
+  </div>
+  <div class="frow" id="coserwrap">
+    <span class="lbl">👤 Coser：</span>
+    <div class="fbar" id="coserbar"></div>
+  </div>
+  <div class="frow" id="tagwrap">
+    <span class="lbl">🏷 标签（可多选，需同时满足）：</span>
+    <div class="fbar" id="tagbar"></div>
+    <button id="btnClearTag" class="chip">✕ 清除筛选</button>
+  </div>
+</div>
+
+<div class="toolbar">
+  <input id="inpSearch" type="search" placeholder="🔍 搜索标题…">
+  <button id="btnRefresh" class="btn ghost small">↻ 刷新</button>
+  <div style="flex:1"></div>
+  <button id="btnDelList" class="btn ghost small">🗑 已删除(<span id="delCount">0</span>)</button>
+</div>
+
+<div id="grid"></div>
+<div class="pager">
+  <button id="btnPrev" class="btn ghost small">‹ 上一页</button>
+  <span id="pageInfo" class="info">第 1 页</span>
+  <button id="btnNext" class="btn ghost small">下一页 ›</button>
+</div>
+
+<!-- 详情视图 -->
+<div id="detail">
+  <div class="dhead">
+    <button id="btnBack" class="btn ghost small">← 返回</button>
+    <button id="btnDelPost" class="btn ghost small danger" title="删除此图集">🗑 删除</button>
+    <div class="dhead-main">
+      <h2 id="dTitle"></h2>
+      <div class="dmeta-line">
+        <span class="meta" id="dMeta"></span>
+        <span class="meta" id="dCats"></span>
+        <span class="meta" id="dCosers"></span>
+        <span class="dmeta-tags" id="dTags"></span>
+      </div>
+    </div>
+  </div>
+  <div id="dBody"><div class="dloading">加载中…</div></div>
+</div>
+
+<!-- Lightbox -->
+<div id="lb">
+  <button class="close" id="lbClose">×</button>
+  <button class="lbnav prev" id="lbPrev">‹</button>
+  <img id="lbImg" src="" alt="">
+  <button class="lbnav next" id="lbNext">›</button>
+  <div class="lbinfo" id="lbInfo"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- 访问令牌门 -->
+<div class="modal-mask" id="tokenGate">
+  <div class="modal">
+    <div class="mhead"><span>🔑 需要访问令牌</span></div>
+    <div class="mbody" style="display:flex;flex-direction:column;gap:12px">
+      <div style="color:var(--muted);font-size:13px">此图库已启用访问保护，请输入共享者提供的访问令牌：</div>
+      <input id="inpToken" type="password" placeholder="访问令牌"
+             style="background:var(--panel2);border:1px solid var(--border);color:var(--text);
+                    border-radius:6px;padding:9px 12px;font-size:14px;outline:none">
+      <button class="btn" onclick="saveToken()">进入图库</button>
+      <div id="tokenErr" style="color:#ff7a7a;font-size:12px;display:none">令牌不正确，请重试</div>
+    </div>
+  </div>
+</div>
+
+<!-- 已删除管理 -->
+<div class="modal-mask" id="delModal">
+  <div class="modal">
+    <div class="mhead">
+      <span>🗑 已删除的图集（后续爬取会自动跳过）</span>
+      <button class="x" id="btnCloseDel">×</button>
+    </div>
+    <div class="mbody" id="delBody"></div>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let page = 1, perPage = 48, totalPosts = 0, polling = null;
+let curPost = null, curImgs = [], lbIdx = 0;
+let activeTags = [], activeCat = null, activeCoser = null, metaBusy = false;
+
+/* ---------- 工具 ---------- */
+function fmtSize(n) {
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + " GB";
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + " MB";
+  if (n >= 1e3) return (n / 1e3).toFixed(0) + " KB";
+  return n + " B";
+}
+let toastTimer = null;
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg; t.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.style.display = "none", 3200);
+}
+let token = localStorage.getItem("gt_token") || "";
+async function api(url, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({}, opts.headers);
+  if (token) opts.headers["X-Access-Token"] = token;
+  const r = await fetch(url, opts);
+  if (r.status === 401) { showTokenGate(true); return { error: "unauthorized" }; }
+  try { return await r.json(); } catch (e) { return {}; }
+}
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s == null ? "" : String(s);
+  return d.innerHTML;
+}
+/* 图片相对路径 → /img/xxx，逐段编码避免 %2F 被服务器规范化 */
+function imgUrl(path) {
+  let u = "/img/" + String(path).split("/").map(encodeURIComponent).join("/");
+  if (token) u += (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
+  return u;
+}
+function showTokenGate(bad) {
+  $("tokenGate").classList.add("open");
+  $("tokenErr").style.display = bad ? "" : "none";
+}
+function saveToken() {
+  const v = $("inpToken").value.trim();
+  if (!v) return;
+  localStorage.setItem("gt_token", v);
+  token = v;
+  $("tokenGate").classList.remove("open");
+  location.reload();
+}
+$("inpToken").addEventListener("keydown", e => { if (e.key === "Enter") saveToken(); });
+
+/* ---------- 统计与爬取状态 ---------- */
+function setBadge(status) {
+  const b = $("badge");
+  const map = { idle: "待机", running: "爬取中…", stopping: "停止中…", done: "已完成", error: "出错" };
+  b.textContent = map[status] || status;
+  b.className = "badge" + (status === "running" ? " running" : status === "error" ? " error" : "");
+}
+function renderLog(lines) {
+  const box = $("logbox");
+  if (!lines || !lines.length) { box.classList.remove("visible"); return; }
+  box.classList.add("visible");
+  box.innerHTML = lines.map(l => esc(l)).join("<br>");
+  box.scrollTop = box.scrollHeight;
+}
+async function refreshStats() {
+  const s = await api("/api/stats");
+  $("stPosts").textContent = s.posts;
+  $("stImages").textContent = s.images;
+  $("stDisk").textContent = fmtSize(s.disk_usage || 0);
+  $("delCount").textContent = s.deleted || 0;
+  setBadge(s.status);
+  renderLog(s.log);
+  metaBusy = !!s.meta_busy;
+  $("btnMeta").disabled = metaBusy || s.status === "running";
+  $("btnMeta").textContent = metaBusy ? "⏳ 补全中…" : "🏷 补全标签";
+  const p = s.progress || {};
+  const active = s.status === "running" || s.status === "stopping";
+  $("btnStart").disabled = s.status === "running";
+  $("btnStop").disabled = s.status !== "running";
+  $("pw").classList.toggle("visible", active || p.finished_at);
+  if (p.list_total > 0) {
+    $("pbar").style.width = Math.min(100, (p.list_page / p.list_total) * 100) + "%";
+    $("pinfo").textContent =
+      `列表页 ${p.list_page}/${p.list_total} · 文章 ${p.posts_done}/${p.posts_found} · 图片 ${p.images_done}/${p.images_total} · 跳过 ${p.posts_skipped} · 错误 ${p.errors}`;
+    $("pcur").textContent = p.current_url || "";
+  } else if (p.started_at) {
+    $("pinfo").textContent = `已发现文章 ${p.posts_found} · 完成 ${p.posts_done} · 图片 ${p.images_done}/${p.images_total} · 错误 ${p.errors}`;
+  }
+  return s;
+}
+
+/* ---------- 筛选（分类 / Coser / 标签多选） ---------- */
+function hasFilter() { return activeTags.length > 0 || activeCat !== null || activeCoser !== null; }
+async function loadFilters() {
+  const [tr, cr, or] = await Promise.all([
+    api("/api/tags"), api("/api/categories"), api("/api/cosers"),
+  ]);
+  const visible = tr.tags.length > 0 || cr.categories.length > 0 || or.cosers.length > 0;
+  $("filterwrap").classList.toggle("visible", visible);
+  $("btnClearTag").style.display = hasFilter() ? "" : "none";
+
+  $("catbar").innerHTML = cr.categories.map(c => {
+    const on = activeCat === c.slug ? " cat-on" : "";
+    return `<button class="chip${on}" data-slug="${esc(c.slug)}" onclick="setCat(this)">${esc(c.name)} (${c.count})</button>`;
+  }).join("") || '<span class="lbl">（暂无分类）</span>';
+
+  $("coserbar").innerHTML = or.cosers.map(c => {
+    const on = activeCoser === c.slug ? " cat-on" : "";
+    return `<button class="chip${on}" data-slug="${esc(c.slug)}" onclick="setCoser(this)">${esc(c.name)} (${c.count})</button>`;
+  }).join("") || '<span class="lbl">（暂无）</span>';
+
+  $("tagbar").innerHTML = tr.tags.map(t => {
+    const on = activeTags.includes(t.slug) ? " on" : "";
+    return `<button class="chip${on}" data-slug="${esc(t.slug)}" onclick="setTag(this)">${esc(t.name)} (${t.count})</button>`;
+  }).join("") || '<span class="lbl">（暂无标签，点击"🏷 补全标签"为已有文章抓取标签）</span>';
+}
+function setTag(btn) {
+  const slug = btn.dataset.slug;
+  const i = activeTags.indexOf(slug);
+  if (i >= 0) activeTags.splice(i, 1); else activeTags.push(slug);
+  page = 1;
+  loadFilters(); loadPosts();
+}
+function setCat(btn) {
+  const slug = btn.dataset.slug;
+  activeCat = activeCat === slug ? null : slug;
+  page = 1;
+  loadFilters(); loadPosts();
+}
+function setCoser(btn) {
+  const slug = btn.dataset.slug;
+  activeCoser = activeCoser === slug ? null : slug;
+  page = 1;
+  loadFilters(); loadPosts();
+}
+function clearFilters() {
+  activeTags = []; activeCat = null; activeCoser = null;
+  page = 1;
+  loadFilters(); loadPosts();
+}
+async function loadPosts() {
+  const q = encodeURIComponent($("inpSearch").value.trim());
+  let url = `/api/posts?page=${page}&per_page=${perPage}&q=${q}`;
+  if (activeTags.length) url += `&tag=${encodeURIComponent(activeTags.join(","))}`;
+  if (activeCat) url += `&cat=${encodeURIComponent(activeCat)}`;
+  if (activeCoser) url += `&coser=${encodeURIComponent(activeCoser)}`;
+  const r = await api(url);
+  totalPosts = r.total;
+  const g = $("grid");
+  if (!r.items.length) {
+    g.innerHTML = `<div class="empty">${totalPosts === 0 ? "还没有任何文章，先在上方 ⚙ 爬取设置 中开始爬取" : "没有匹配的文章"}</div>`;
+  } else {
+    g.innerHTML = r.items.map(p => `
+      <div class="card" onclick="openPost('${p.slug}')">
+        <div class="thumb">
+          <img loading="lazy" src="${imgUrl(p.cover)}" alt="">
+          <button class="del-btn" onclick="deletePost('${p.slug}', event)" title="删除图集">🗑</button>
+          <span class="cnt">${p.count} 张${p.video_count ? ` · 🎬${p.video_count}` : ""}</span>
+        </div>
+        <div class="t">${esc(p.title)}</div>
+      </div>`).join("");
+  }
+  const pages = Math.max(1, Math.ceil(totalPosts / perPage));
+  $("pageInfo").textContent = `第 ${page}/${pages} 页 · 共 ${totalPosts} 篇`;
+  $("btnPrev").disabled = page <= 1;
+  $("btnNext").disabled = page >= pages;
+}
+
+/* ---------- 详情与 Lightbox ---------- */
+async function openPost(slug) {
+  const d = await api("/api/posts/" + slug);
+  if (d.error) { toast("加载失败"); return; }
+  curPost = d; curImgs = d.images;
+  $("dTitle").textContent = d.title;
+  const vc = (d.videos || []).length;
+  $("dMeta").textContent = `${d.count} 张图片${vc ? ` · 🎬 ${vc} 个视频` : ""}`;
+  const tagHtml = (d.tags || []).map(t =>
+    `<button class="chip" onclick="detailTag('${esc(t.slug)}')">${esc(t.name)}</button>`).join("");
+  const catHtml = (d.categories || []).map(c =>
+    `<button class="chip" onclick="detailCat('${esc(c.slug)}')">${esc(c.name)}</button>`).join("");
+  const coserHtml = (d.cosers || []).map(c =>
+    `<button class="chip" onclick="detailCoser('${esc(c.slug)}')">${esc(c.name)}</button>`).join("");
+  $("dTags").innerHTML = tagHtml ? `<span class="lbl">🏷</span> ${tagHtml}` : "";
+  $("dCats").innerHTML = catHtml ? `<span class="lbl">📁</span> ${catHtml}` : "";
+  $("dCosers").innerHTML = coserHtml ? `<span class="lbl">👤</span> ${coserHtml}` : "";
+  let vhtml = "";
+  if (d.videos && d.videos.length) {
+    vhtml = `<div class="vsec"><div class="vhead">🎬 视频（${d.videos.length} 个 · 原站托管，无法下载）</div>` +
+      d.videos.map((v, i) =>
+        `<div class="vitem">
+           <a class="vlink" href="${v.embed}" target="_blank" rel="noopener">🎬 视频 ${i + 1} · 来源链接（原站观看）</a>
+           <button class="vexpand" onclick="toggleVideo(this, '${esc(v.embed)}')">▶ 展开在线播放</button>
+           <div class="vframe"><iframe data-src="${esc(v.embed)}" scrolling="no" allowfullscreen
+             referrerpolicy="no-referrer"></iframe></div>
+           <div class="vnote">视频托管在原站 cossora（加密防盗链，无法下载到本地），可点击来源链接跳转原站观看。</div>
+         </div>`
+      ).join("") + `</div>`;
+  }
+  $("dBody").innerHTML = vhtml + `<div class="dgrid">` +
+    d.images.map((im, i) =>
+      `<img loading="lazy" src="${imgUrl(im)}" onclick="openLb(${i})">`).join("") +
+    `</div>`;
+  $("detail").classList.add("open");
+  document.body.style.overflow = "hidden";
+}
+function detailTag(slug) {
+  closePost();
+  const i = activeTags.indexOf(slug);
+  if (i >= 0) activeTags.splice(i, 1); else activeTags.push(slug);
+  page = 1;
+  loadFilters(); loadPosts();
+  $("filterwrap").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function detailCat(slug) {
+  closePost();
+  activeCat = activeCat === slug ? null : slug;
+  page = 1;
+  loadFilters(); loadPosts();
+  $("filterwrap").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function detailCoser(slug) {
+  closePost();
+  activeCoser = activeCoser === slug ? null : slug;
+  page = 1;
+  loadFilters(); loadPosts();
+  $("filterwrap").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+function toggleVideo(btn, embedUrl) {
+  const frame = btn.parentElement.querySelector(".vframe");
+  const iframe = frame.querySelector("iframe");
+  if (!frame.classList.contains("open")) {
+    if (!iframe.src) iframe.src = iframe.dataset.src || embedUrl;
+    frame.classList.add("open");
+    btn.textContent = "▼ 收起";
+  } else {
+    frame.classList.remove("open");
+    btn.textContent = "▶ 展开在线播放";
+  }
+}
+
+/* ---------- 删除 / 恢复 ---------- */
+async function deletePost(slug, ev) {
+  if (ev) ev.stopPropagation();
+  if (!confirm(`确定删除图集「${slug}」吗？\n本地图片文件将被删除。\n（已删除的图集后续爬取会自动跳过，可在"已删除"中恢复）`)) return;
+  const r = await api("/api/posts/" + slug, { method: "DELETE" });
+  if (r.error) { toast(r.error); return; }
+  toast("已删除");
+  refreshStats();
+  loadPosts(); loadFilters();
+  if (curPost && curPost.slug === slug) closePost();
+}
+async function restorePost(slug) {
+  const r = await api("/api/posts/" + slug + "/restore", { method: "POST" });
+  if (r.error) { toast(r.error); return; }
+  toast(r.message || "已恢复");
+  openDelPanel();
+  refreshStats();
+}
+async function openDelPanel() {
+  const r = await api("/api/deleted");
+  const body = $("delBody");
+  if (!r.deleted.length) {
+    body.innerHTML = '<div class="drow"><span class="t">（暂无已删除的图集）</span></div>';
+  } else {
+    body.innerHTML = r.deleted.map(d => `
+      <div class="drow">
+        <span class="t">${esc(d.title || d.slug)}</span>
+        <span class="delat">${esc(d.deleted_at || "")}</span>
+        <button class="btn small" onclick="restorePost('${esc(d.slug)}')">↩ 恢复</button>
+      </div>`).join("");
+  }
+  $("delModal").classList.add("open");
+}
+function closePost() {
+  $("detail").classList.remove("open");
+  document.body.style.overflow = "";
+  curPost = null;
+}
+function openLb(i) {
+  if (!curImgs.length) return;
+  lbIdx = i;
+  $("lbImg").src = imgUrl(curImgs[i]);
+  $("lbInfo").textContent = `${i + 1} / ${curImgs.length}`;
+  $("lb").classList.add("open");
+}
+function lbStep(d) {
+  if (!curImgs.length) return;
+  lbIdx = (lbIdx + d + curImgs.length) % curImgs.length;
+  $("lbImg").src = imgUrl(curImgs[lbIdx]);
+  $("lbInfo").textContent = `${lbIdx + 1} / ${curImgs.length}`;
+}
+function closeLb() { $("lb").classList.remove("open"); $("lbImg").src = ""; }
+
+/* ---------- 爬取控制 ---------- */
+async function startCrawl() {
+  const body = {
+    url: $("inpUrl").value.trim() || "https://cosplaytele.com",
+    proxy: $("inpProxy").value.trim(),
+    start_page: parseInt($("inpStart").value, 10) || 1,
+    end_page: $("inpEnd").value ? parseInt($("inpEnd").value, 10) : null,
+  };
+  const r = await api("/api/crawl/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (r.error) toast(r.error); else { toast("已开始爬取"); startPolling(); }
+}
+async function stopCrawl() {
+  await api("/api/crawl/stop", { method: "POST" });
+  toast("已请求停止");
+}
+async function refreshMeta() {
+  const r = await api("/api/meta/refresh", { method: "POST" });
+  if (r.error) toast(r.error); else { toast("已开始补全标签"); startPolling(); }
+}
+
+/* ---------- 轮询 ---------- */
+function startPolling() {
+  if (polling) return;
+  polling = setInterval(async () => {
+    const s = await refreshStats();
+    if (s.status !== "running" && s.status !== "stopping") {
+      clearInterval(polling); polling = null;
+      loadPosts(); loadFilters();
+    }
+  }, 1500);
+}
+function initPolling() {
+  if (polling) return;
+  polling = setInterval(async () => {
+    const s = await refreshStats();
+    if (s.status === "running" || s.status === "stopping") { loadPosts(); loadFilters(); return; }
+    clearInterval(polling); polling = null;
+  }, 3000);
+}
+
+/* ---------- 事件绑定 ---------- */
+$("btnTogglePanel").onclick = () => $("panel").classList.toggle("open");
+$("btnStart").onclick = startCrawl;
+$("btnStop").onclick = stopCrawl;
+$("btnMeta").onclick = refreshMeta;
+$("btnClearTag").onclick = clearFilters;
+$("btnDelList").onclick = openDelPanel;
+$("btnDelPost").onclick = () => { if (curPost) deletePost(curPost.slug); };
+$("btnCloseDel").onclick = () => $("delModal").classList.remove("open");
+$("delModal").addEventListener("click", e => {
+  if (e.target === $("delModal")) $("delModal").classList.remove("open");
+});
+$("btnRefresh").onclick = () => { page = 1; loadPosts(); loadFilters(); };
+$("btnPrev").onclick = () => { if (page > 1) { page--; loadPosts(); } };
+$("btnNext").onclick = () => { page++; loadPosts(); };
+$("btnBack").onclick = closePost;
+$("lbClose").onclick = closeLb;
+$("lbPrev").onclick = () => lbStep(-1);
+$("lbNext").onclick = () => lbStep(1);
+let searchTimer = null;
+$("inpSearch").addEventListener("input", () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { page = 1; loadPosts(); }, 350);
+});
+document.addEventListener("keydown", e => {
+  if ($("lb").classList.contains("open")) {
+    if (e.key === "Escape") closeLb();
+    if (e.key === "ArrowLeft") lbStep(-1);
+    if (e.key === "ArrowRight") lbStep(1);
+  } else if ($("detail").classList.contains("open") && e.key === "Escape") {
+    closePost();
+  }
+});
+
+/* ---------- 启动 ---------- */
+refreshStats().then(s => {
+  if (s.status === "running") startPolling(); else initPolling();
+});
+loadFilters();
+loadPosts();
+</script>
+</body>
+</html>
