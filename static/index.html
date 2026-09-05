@@ -180,11 +180,33 @@
     border-radius: 6px; padding: 5px 12px; font-size: 12px; cursor: pointer;
   }
   .vexpand:hover { border-color: var(--accent2); }
-  .vframe { width: 100%; flex-basis: 100%; display: none; }
+  .vframe {
+    width: 100%; max-width: 720px; aspect-ratio: 16/9; flex-basis: 100%;
+    display: none; position: relative; overflow: hidden; background: #08090c;
+    border: 1px solid var(--border); border-radius: 6px;
+  }
   .vframe.open { display: block; }
-  .vframe iframe { width: 100%; aspect-ratio: 16/9; border: none; border-radius: 6px; display: block; }
+  .vframe video { width: 100%; height: 100%; display: block; background: #08090c; }
+  .vstatus {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    gap: 10px; padding: 16px; color: var(--muted); font-size: 13px; text-align: center;
+    background: #08090c;
+  }
+  .vstatus.ready { display: none; }
+  .vstatus.failed { color: #ff9b9b; }
+  .vretry {
+    display: none; background: var(--panel2); border: 1px solid var(--border);
+    color: var(--text); border-radius: 6px; padding: 5px 12px; cursor: pointer;
+  }
+  .vretry:hover { border-color: var(--accent2); }
   .vnote { font-size: 12px; color: var(--muted); flex-basis: 100%; }
   .dloading { text-align: center; padding: 60px; color: var(--muted); }
+
+  @media (max-width: 600px) {
+    .vsec { padding-left: 12px; padding-right: 12px; }
+    .vitem { padding: 10px; gap: 10px; }
+    .vframe { max-width: 100%; }
+  }
 
   /* ---------- 已删除管理弹层 ---------- */
   .modal-mask {
@@ -370,12 +392,15 @@
   </div>
 </div>
 
+<script src="/static/vendor/hls.min.js"></script>
 <script>
 "use strict";
 const $ = id => document.getElementById(id);
 let page = 1, perPage = 48, totalPosts = 0, polling = null;
 let curPost = null, curImgs = [], lbIdx = 0;
 let activeTags = [], activeCat = null, activeCoser = null, metaBusy = false;
+let detailVersion = 0;
+const videoPlayers = new Map();
 
 /* ---------- 工具 ---------- */
 function fmtSize(n) {
@@ -410,6 +435,12 @@ function imgUrl(path) {
   let u = "/img/" + String(path).split("/").map(encodeURIComponent).join("/");
   if (token) u += (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(token);
   return u;
+}
+function mediaUrl(path) {
+  const u = new URL(path, location.href);
+  if (u.origin !== location.origin) throw new Error("媒体地址不是本站地址");
+  if (token) u.searchParams.set("token", token);
+  return u.pathname + u.search + u.hash;
 }
 function showTokenGate(bad) {
   $("tokenGate").classList.add("open");
@@ -545,8 +576,16 @@ async function loadPosts() {
 
 /* ---------- 详情与 Lightbox ---------- */
 async function openPost(slug) {
-  const d = await api("/api/posts/" + slug);
-  if (d.error) { toast("加载失败"); return; }
+  stopAllVideos();
+  const viewVersion = ++detailVersion;
+  curPost = null;
+  curImgs = [];
+  $("dBody").innerHTML = '<div class="dloading">加载中…</div>';
+  $("detail").classList.add("open");
+  document.body.style.overflow = "hidden";
+  const d = await api("/api/posts/" + encodeURIComponent(slug));
+  if (viewVersion !== detailVersion) return;
+  if (d.error) { toast("加载失败"); closePost(); return; }
   curPost = d; curImgs = d.images;
   $("dTitle").textContent = d.title;
   const vc = (d.videos || []).length;
@@ -562,14 +601,15 @@ async function openPost(slug) {
   $("dCosers").innerHTML = coserHtml ? `<span class="lbl">👤</span> ${coserHtml}` : "";
   let vhtml = "";
   if (d.videos && d.videos.length) {
-    vhtml = `<div class="vsec"><div class="vhead">🎬 视频（${d.videos.length} 个 · 原站托管，无法下载）</div>` +
+    vhtml = `<div class="vsec"><div class="vhead">🎬 视频（${d.videos.length} 个）</div>` +
       d.videos.map((v, i) =>
         `<div class="vitem">
-           <a class="vlink" href="${v.embed}" target="_blank" rel="noopener">🎬 视频 ${i + 1} · 来源链接（原站观看）</a>
-           <button class="vexpand" onclick="toggleVideo(this, '${esc(v.embed)}')">▶ 展开在线播放</button>
-           <div class="vframe"><iframe data-src="${esc(v.embed)}" scrolling="no" allowfullscreen
-             referrerpolicy="no-referrer"></iframe></div>
-           <div class="vnote">视频托管在原站 cossora（加密防盗链，无法下载到本地），可点击来源链接跳转原站观看。</div>
+           <a class="vlink" href="${esc(d.url)}" target="_blank" rel="noopener">🎬 视频 ${i + 1} · 查看原始文章</a>
+           <button class="vexpand" data-index="${i}" onclick="toggleVideo(this)">在线观看</button>
+           <div class="vframe">
+             <video controls playsinline preload="metadata"></video>
+             <div class="vstatus"><span class="vmessage">准备加载</span><button class="vretry" onclick="retryVideo(this)">重试</button></div>
+           </div>
          </div>`
       ).join("") + `</div>`;
   }
@@ -577,8 +617,6 @@ async function openPost(slug) {
     d.images.map((im, i) =>
       `<img loading="lazy" src="${imgUrl(im)}" onclick="openLb(${i})">`).join("") +
     `</div>`;
-  $("detail").classList.add("open");
-  document.body.style.overflow = "hidden";
 }
 function detailTag(slug) {
   closePost();
@@ -602,17 +640,123 @@ function detailCoser(slug) {
   loadFilters(); loadPosts();
   $("filterwrap").scrollIntoView({ behavior: "smooth", block: "start" });
 }
-function toggleVideo(btn, embedUrl) {
-  const frame = btn.parentElement.querySelector(".vframe");
-  const iframe = frame.querySelector("iframe");
-  if (!frame.classList.contains("open")) {
-    if (!iframe.src) iframe.src = iframe.dataset.src || embedUrl;
-    frame.classList.add("open");
-    btn.textContent = "▼ 收起";
-  } else {
-    frame.classList.remove("open");
-    btn.textContent = "▶ 展开在线播放";
+function setVideoStatus(frame, message, state) {
+  const status = frame.querySelector(".vstatus");
+  status.className = "vstatus " + state;
+  status.querySelector(".vmessage").textContent = message;
+  status.querySelector(".vretry").style.display = state === "failed" ? "inline-flex" : "none";
+}
+function clearVideoMedia(state) {
+  if (state.hls) {
+    state.hls.destroy();
+    state.hls = null;
   }
+  state.video.pause();
+  state.video.removeAttribute("src");
+  state.video.load();
+}
+function stopVideo(item) {
+  const state = videoPlayers.get(item);
+  if (!state) return;
+  state.cancelled = true;
+  clearVideoMedia(state);
+  videoPlayers.delete(item);
+}
+function stopAllVideos() {
+  Array.from(videoPlayers.keys()).forEach(stopVideo);
+}
+function videoRequestError(data) {
+  if (data && data.error === "unauthorized") return "访问令牌无效，请重新输入后重试";
+  return (data && data.error) || "无法取得播放地址";
+}
+function failVideo(item, state, message) {
+  if (videoPlayers.get(item) !== state || state.cancelled) return;
+  clearVideoMedia(state);
+  setVideoStatus(state.frame, "视频加载失败：" + message, "failed");
+}
+async function startVideo(btn) {
+  const item = btn.parentElement;
+  const frame = btn.parentElement.querySelector(".vframe");
+  const video = frame.querySelector("video");
+  stopVideo(item);
+  const post = curPost;
+  const viewVersion = detailVersion;
+  const state = { frame, video, hls: null, cancelled: false };
+  videoPlayers.set(item, state);
+  setVideoStatus(frame, "正在加载视频…", "loading");
+  btn.textContent = "收起";
+  let data;
+  try {
+    const index = Number.parseInt(btn.dataset.index, 10);
+    data = await api(`/api/videos/${encodeURIComponent(post.slug)}/${index}`);
+  } catch (e) {
+    failVideo(item, state, "网络请求失败");
+    return;
+  }
+  if (videoPlayers.get(item) !== state || state.cancelled ||
+      viewVersion !== detailVersion || curPost !== post || !frame.classList.contains("open")) return;
+  if (!data || data.error) {
+    failVideo(item, state, videoRequestError(data));
+    return;
+  }
+  if (data.type !== "hls" || typeof data.url !== "string") {
+    failVideo(item, state, "服务端返回了不支持的播放格式");
+    return;
+  }
+  let source;
+  try {
+    source = mediaUrl(data.url);
+  } catch (e) {
+    failVideo(item, state, e.message);
+    return;
+  }
+  const markReady = () => {
+    if (videoPlayers.get(item) === state && !state.cancelled) {
+      setVideoStatus(frame, "", "ready");
+    }
+  };
+  const markFailed = () => failVideo(item, state, "媒体播放出错，请重试");
+  video.addEventListener("loadedmetadata", markReady, { once: true });
+  video.addEventListener("error", markFailed, { once: true });
+  const supportsHls = typeof Hls !== "undefined" && Hls.isSupported();
+  if (!supportsHls && video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = source;
+    video.load();
+    return;
+  }
+  if (!supportsHls) {
+    failVideo(item, state, "当前浏览器不支持 HLS 播放");
+    return;
+  }
+  const hls = new Hls({
+    xhrSetup(xhr, url) {
+      const target = new URL(url, location.href);
+      if (token && target.origin === location.origin) {
+        xhr.setRequestHeader("X-Access-Token", token);
+      }
+    },
+  });
+  state.hls = hls;
+  hls.on(Hls.Events.ERROR, (_event, error) => {
+    if (error && error.fatal) markFailed();
+  });
+  hls.loadSource(source);
+  hls.attachMedia(video);
+}
+function toggleVideo(btn) {
+  const frame = btn.parentElement.querySelector(".vframe");
+  if (!frame.classList.contains("open")) {
+    frame.classList.add("open");
+    return startVideo(btn);
+  } else {
+    stopVideo(btn.parentElement);
+    frame.classList.remove("open");
+    btn.textContent = "在线观看";
+  }
+}
+function retryVideo(btn) {
+  const item = btn.parentElement.parentElement.parentElement;
+  return startVideo(item.querySelector(".vexpand"));
 }
 
 /* ---------- 删除 / 恢复 ---------- */
@@ -649,9 +793,12 @@ async function openDelPanel() {
   $("delModal").classList.add("open");
 }
 function closePost() {
+  detailVersion += 1;
+  stopAllVideos();
   $("detail").classList.remove("open");
   document.body.style.overflow = "";
   curPost = null;
+  curImgs = [];
 }
 function openLb(i) {
   if (!curImgs.length) return;

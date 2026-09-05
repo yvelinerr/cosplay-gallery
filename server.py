@@ -22,6 +22,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote
 
 from crawler import Crawler, SITE, DEFAULT_PROXY
+from video import VideoError, VideoService
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
@@ -33,6 +34,7 @@ PORT = int(os.environ.get("PORT", "8765"))
 ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "").strip()
 
 crawler = Crawler(data_dir=DATA_DIR, proxy=DEFAULT_PROXY)
+video_service = VideoService(crawler)
 
 # 补充常见图片 MIME
 mimetypes.add_type("image/webp", ".webp")
@@ -60,7 +62,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # 静默访问日志
 
-    def _send(self, code, body: bytes, ctype="text/plain; charset=utf-8", extra=None):
+    def _send(self, code, body: bytes, ctype="text/plain; charset=utf-8", extra=None,
+              head_only=False):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -70,7 +73,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header(k, v)
         self.end_headers()
         try:
-            self.wfile.write(body)
+            if not head_only and self.command != "HEAD":
+                self.wfile.write(body)
         except Exception:
             pass
 
@@ -109,7 +113,7 @@ class Handler(BaseHTTPRequestHandler):
             return {}
 
     # ---------- 静态与图片 ----------
-    def _serve_file(self, path: str):
+    def _serve_file(self, path: str, head_only=False):
         if not os.path.isfile(path):
             return False
         ctype, _ = mimetypes.guess_type(path)
@@ -121,7 +125,7 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             return False
         self._send(200, data, ctype,
-                   {"Cache-Control": "max-age=86400"})
+                   {"Cache-Control": "max-age=86400"}, head_only=head_only)
         return True
 
     def _safe_img_path(self, rel: str):
@@ -135,16 +139,29 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---------- 路由 ----------
     def do_GET(self):
+        self._do_get("GET")
+
+    def do_HEAD(self):
+        self._do_get("HEAD")
+
+    def _do_get(self, method):
         parsed = urlparse(self.path)
         path = parsed.path
         qs = parse_qs(parsed.query)
+
+        if path == "/static/vendor/hls.min.js":
+            fp = os.path.join(STATIC_DIR, "vendor", "hls.min.js")
+            if not self._serve_file(fp, head_only=(method == "HEAD")):
+                self._json({"error": "not found"}, 404)
+            return
 
         if path in ("/", "/index.html"):
             # 页面本身可访问，由前端负责令牌门控
             idx = os.path.join(STATIC_DIR, "index.html")
             if os.path.isfile(idx):
                 with open(idx, "rb") as f:
-                    self._send(200, f.read(), "text/html; charset=utf-8")
+                    self._send(200, f.read(), "text/html; charset=utf-8",
+                               head_only=(method == "HEAD"))
             else:
                 self._json({"error": "缺少前端页面 static/index.html"}, 500)
             return
@@ -152,8 +169,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/img/"):
             fp = self._safe_img_path(path[len("/img/"):])
-            if not fp or not self._serve_file(fp):
+            if not fp or not self._serve_file(fp, head_only=(method == "HEAD")):
                 self._json({"error": "not found"}, 404)
+        elif path.startswith("/api/videos/"):
+            self._api_video(path)
+        elif path.startswith("/video/"):
+            self._video_resource(path, method, qs)
         elif path == "/api/stats":
             self._json(crawler.get_stats())
         elif path == "/api/crawl/status":
@@ -175,6 +196,56 @@ class Handler(BaseHTTPRequestHandler):
             self._api_post_detail(slug)
         else:
             self._json({"error": "not found"}, 404)
+
+    def _video_error(self, error):
+        self._json({"error": str(error)}, error.status)
+
+    def _api_video(self, path):
+        tail = path[len("/api/videos/"):]
+        try:
+            encoded_slug, raw_index = tail.rsplit("/", 1)
+            if not encoded_slug:
+                raise ValueError
+            index = int(raw_index)
+            if index < 0:
+                raise ValueError
+        except ValueError:
+            self._json({"error": "视频参数不合法"}, 400)
+            return
+        try:
+            url = video_service.create_video_session(unquote(encoded_slug), index)
+        except VideoError as exc:
+            self._video_error(exc)
+            return
+        self._json({"url": url, "type": "hls"})
+
+    def _video_resource(self, path, method, qs):
+        parts = path[len("/video/"):].split("/")
+        if len(parts) != 2 or not all(parts):
+            self._json({"error": "not found"}, 404)
+            return
+        token = self.headers.get("X-Access-Token", "")
+        if not token:
+            token = qs.get("token", [""])[0]
+        try:
+            response = video_service.open_resource(
+                parts[0], parts[1], method, self.headers.get("Range"), token)
+        except VideoError as exc:
+            self._video_error(exc)
+            return
+        try:
+            self.send_response(response.status)
+            for name, value in response.headers.items():
+                self.send_header(name, value)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            if method != "HEAD":
+                for chunk in response.iter_body():
+                    self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, OSError, VideoError):
+            pass
+        finally:
+            response.close()
 
     def do_DELETE(self):
         if not self._require_auth():
